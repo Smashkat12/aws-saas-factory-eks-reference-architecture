@@ -11,14 +11,13 @@ if [[ -z "$CDK_PARAM_SYSTEM_ADMIN_EMAIL" ]]; then
   exit 1
 fi
 
-if [[ -z "$CDK_PARAM_DOMAIN_NAME" ]]; then
-  echo "Please provide domain name as second parameter"
-  exit 1
-fi
-
-if [[ -z "$CDK_PARAM_HOSTED_ZONE_ID" ]]; then
-  echo "Please provide hosted zone ID as third parameter"
-  exit 1
+# Domain and hosted zone are optional for backward compatibility
+if [[ -n "$CDK_PARAM_DOMAIN_NAME" ]] && [[ -n "$CDK_PARAM_HOSTED_ZONE_ID" ]]; then
+  echo "Using custom domain: $CDK_PARAM_DOMAIN_NAME with hosted zone: $CDK_PARAM_HOSTED_ZONE_ID"
+  DOMAIN_PARAMS="--domain=$CDK_PARAM_DOMAIN_NAME --hostedzone=$CDK_PARAM_HOSTED_ZONE_ID"
+else
+  echo "No custom domain provided, using default CloudFront URLs"
+  DOMAIN_PARAMS=""
 fi
 
 export REGION=$(aws configure get region)
@@ -56,7 +55,7 @@ export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
 export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE=$CDK_PARAM_OFFBOARDING_DETAIL_TYPE
 
 
-npm run deploy --email=$CDK_PARAM_SYSTEM_ADMIN_EMAIL --domain=$CDK_PARAM_DOMAIN_NAME --hostedzone=$CDK_PARAM_HOSTED_ZONE_ID
+npm run deploy -- --email=$CDK_PARAM_SYSTEM_ADMIN_EMAIL $DOMAIN_PARAMS
 
 STACKS=$(aws cloudformation describe-stacks)
 
