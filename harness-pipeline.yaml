@@ -1,0 +1,267 @@
+pipeline:
+  name: SaaS Factory EKS Deployment
+  identifier: saas_factory_eks_deployment
+  projectIdentifier: Testing
+  orgIdentifier: default
+  stages:
+    - stage:
+        name: Deploy SaaS Factory
+        identifier: deploy_saas_factory
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Setup Environment
+                  identifier: setup_environment
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          #!/bin/bash -e
+                          echo "Setting up environment variables..."
+                          
+                          # Core parameters
+                          export CDK_PARAM_SYSTEM_ADMIN_EMAIL="smashkat12@gmail.com"
+                          export CDK_PARAM_DOMAIN_NAME="thinkm8.co.uk"
+                          export CDK_PARAM_HOSTED_ZONE_ID="Z0494651P0BXWLJV1MEX"
+                          
+                          # AWS Configuration
+                          export AWS_PAGER=''
+                          export AWS_REGION=eu-west-1
+                          export AWS_DEFAULT_REGION=eu-west-1
+                          export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_cdk_access_key")>
+                          export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_cdk_secret_key")>
+                          
+                          # CDK Parameters
+                          export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
+                          export CDK_PARAM_ONBOARDING_DETAIL_TYPE='Onboarding'
+                          export CDK_PARAM_PROVISIONING_DETAIL_TYPE=$CDK_PARAM_ONBOARDING_DETAIL_TYPE
+                          export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE="sbt-application-plane-api"
+                          export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
+                          export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE=$CDK_PARAM_OFFBOARDING_DETAIL_TYPE
+                          
+                          echo "Environment variables configured successfully"
+                          env | grep CDK_PARAM || true
+                    environmentVariables: []
+                    outputVariables:
+                      - name: CDK_PARAM_SYSTEM_ADMIN_EMAIL
+                        type: String
+                        value: CDK_PARAM_SYSTEM_ADMIN_EMAIL
+                    timeout: 10m
+                  delegate:
+                    type: Delegate
+                    spec:
+                      selectors:
+                        - testing-local-delegate
+
+              - step:
+                  type: ShellScript
+                  name: Clone Repository
+                  identifier: clone_repository
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          #!/bin/bash -e
+                          echo "Cloning repository..."
+                          
+                          # Configure git with AWS credentials
+                          export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_cdk_access_key")>
+                          export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_cdk_secret_key")>
+                          export AWS_DEFAULT_REGION=eu-west-1
+                          
+                          # Clone the repository
+                          rm -rf /tmp/saas-factory-eks || true
+                          git clone https://github.com/aws-samples/aws-saas-factory-eks-reference-architecture.git /tmp/saas-factory-eks
+                          cd /tmp/saas-factory-eks
+                          
+                          echo "Repository cloned successfully"
+                          ls -la
+                    environmentVariables: []
+                    timeout: 10m
+                  delegate:
+                    type: Delegate
+                    spec:
+                      selectors:
+                        - testing-local-delegate
+
+              - step:
+                  type: ShellScript
+                  name: Install Dependencies
+                  identifier: install_dependencies
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          #!/bin/bash -e
+                          echo "Installing dependencies..."
+                          cd /tmp/saas-factory-eks
+                          
+                          # Set AWS credentials for CDK
+                          export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_cdk_access_key")>
+                          export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_cdk_secret_key")>
+                          export AWS_DEFAULT_REGION=eu-west-1
+                          export AWS_REGION=eu-west-1
+                          
+                          # Verify tools
+                          echo "Checking installed tools..."
+                          aws --version
+                          node --version
+                          npm --version
+                          cdk --version
+                          
+                          # Install npm dependencies
+                          npm install
+                          
+                          # Build TypeScript
+                          npm run build
+                          
+                          echo "Dependencies installed and built successfully"
+                    environmentVariables: []
+                    timeout: 10m
+                  delegate:
+                    type: Delegate
+                    spec:
+                      selectors:
+                        - testing-local-delegate
+
+              - step:
+                  type: ShellScript
+                  name: Deploy CDK Stacks
+                  identifier: deploy_cdk_stacks
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          #!/bin/bash -e
+                          echo "Deploying CDK stacks..."
+                          cd /tmp/saas-factory-eks
+                          
+                          # Set all required environment variables
+                          export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_cdk_access_key")>
+                          export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_cdk_secret_key")>
+                          export AWS_DEFAULT_REGION=eu-west-1
+                          export AWS_REGION=eu-west-1
+                          export AWS_PAGER=''
+                          
+                          # Parameters for CDK (used by SBT)
+                          export CDK_PARAM_SYSTEM_ADMIN_EMAIL="smashkat12@gmail.com"
+                          export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
+                          export CDK_PARAM_ONBOARDING_DETAIL_TYPE='Onboarding'
+                          export CDK_PARAM_PROVISIONING_DETAIL_TYPE=$CDK_PARAM_ONBOARDING_DETAIL_TYPE
+                          export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE="sbt-application-plane-api"
+                          export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
+                          export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE=$CDK_PARAM_OFFBOARDING_DETAIL_TYPE
+                          
+                          # Run CDK deployment with domain parameters
+                          echo "Running CDK deploy with custom domain..."
+                          echo "Email: smashkat12@gmail.com"
+                          echo "Domain: thinkm8.co.uk"
+                          echo "Hosted Zone: Z0494651P0BXWLJV1MEX"
+                          
+                          npm run deploy -- --email=smashkat12@gmail.com --domain=thinkm8.co.uk --hostedzone=Z0494651P0BXWLJV1MEX
+                          
+                          echo "CDK deployment completed successfully"
+                    environmentVariables: []
+                    timeout: 60m
+                  delegate:
+                    type: Delegate
+                    spec:
+                      selectors:
+                        - testing-local-delegate
+
+              - step:
+                  type: ShellScript
+                  name: Configure Cognito and API Gateway
+                  identifier: configure_cognito_api
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          #!/bin/bash -e
+                          echo "Configuring Cognito and API Gateway..."
+                          
+                          # Set AWS credentials
+                          export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_cdk_access_key")>
+                          export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_cdk_secret_key")>
+                          export AWS_DEFAULT_REGION=eu-west-1
+                          export AWS_REGION=eu-west-1
+                          export AWS_PAGER=''
+                          
+                          # Get CloudFormation outputs
+                          STACKS=$(aws cloudformation describe-stacks)
+                          
+                          USERPOOLID=$(echo $STACKS | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ControlPlaneIdpUserPoolId") | .OutputValue')
+                          echo "User Pool ID: $USERPOOLID"
+                          
+                          CLIENTID=$(echo $STACKS | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ControlPlaneIdpClientId") | .OutputValue')
+                          echo "Client ID: $CLIENTID"
+                          
+                          ADMIN_SITE_URL=$(echo $STACKS | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="AdminSiteUrl") | .OutputValue')
+                          echo "Admin Site URL: $ADMIN_SITE_URL"
+                          
+                          APPLICATION_SITE_URL=$(echo $STACKS | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ApplicationSiteUrl") | .OutputValue')
+                          echo "Application Site URL: $APPLICATION_SITE_URL"
+                          
+                          API_ID=$(aws apigatewayv2 get-apis --query "Items[?Name=='controlPlaneAPI'].ApiId | [0]" --output text)
+                          echo "API ID: $API_ID"
+                          
+                          # Update Cognito client
+                          if [[ -n "$USERPOOLID" && -n "$CLIENTID" && -n "$ADMIN_SITE_URL" ]]; then
+                            echo "Updating Cognito User Pool Client..."
+                            aws cognito-idp update-user-pool-client \
+                              --user-pool-id $USERPOOLID \
+                              --client-id $CLIENTID \
+                              --allowed-o-auth-flows-user-pool-client \
+                              --callback-urls "$ADMIN_SITE_URL" \
+                              --logout-urls "$ADMIN_SITE_URL/signout" \
+                              --supported-identity-providers "COGNITO" \
+                              --allowed-o-auth-flows "code" "implicit" \
+                              --allowed-o-auth-scopes "phone" "email" "openid" "profile" "tenant/tenant_read" "tenant/tenant_write" "user/user_read" "user/user_write"
+                          fi
+                          
+                          # Update API Gateway CORS
+                          if [[ -n "$API_ID" && -n "$ADMIN_SITE_URL" && -n "$APPLICATION_SITE_URL" ]]; then
+                            echo "Updating API Gateway CORS configuration..."
+                            aws apigatewayv2 update-api \
+                              --api-id $API_ID \
+                              --cors-configuration AllowOrigins="$ADMIN_SITE_URL,$APPLICATION_SITE_URL",AllowMethods="*",AllowHeaders="*"
+                          fi
+                          
+                          echo "========================================="
+                          echo "Deployment completed successfully!"
+                          echo "========================================="
+                          echo "Admin Site URL: $ADMIN_SITE_URL"
+                          echo "Application Site URL: $APPLICATION_SITE_URL"
+                          echo "========================================="
+                    environmentVariables: []
+                    timeout: 10m
+                  delegate:
+                    type: Delegate
+                    spec:
+                      selectors:
+                        - testing-local-delegate
+
+  properties:
+    ci:
+      codebase:
+        connectorRef: <+input>
+        repoName: <+input>
+        build: <+input>
