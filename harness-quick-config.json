@@ -11,8 +11,8 @@
       "location": "Testing Project Secrets"
     },
     "github_connector": {
-      "reference": "account.Github",
-      "scope": "Account level",
+      "reference": "Github",
+      "scope": "Project level (Testing)",
       "access": "All repositories in GitHub account"
     }
   },

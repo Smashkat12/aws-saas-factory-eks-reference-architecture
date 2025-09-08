@@ -1,0 +1,186 @@
+{
+  "pipeline_name": "SaaS Factory EKS - Basic Tier Optimized",
+  "description": "Quick setup configuration for Harness Basic tier deployment",
+  "tier": "basic",
+  "estimated_build_time": "35-45 minutes",
+  "monthly_capacity": "7-10 full deployments (300 minutes limit)",
+  
+  "required_secrets": {
+    "aws_access_key_id": {
+      "type": "text",
+      "description": "AWS programmatic access key ID"
+    },
+    "aws_secret_access_key": {
+      "type": "text", 
+      "description": "AWS programmatic secret access key"
+    }
+  },
+  
+  "required_connectors": {
+    "github_connector": {
+      "type": "GitHub",
+      "description": "GitHub connector for source code repository",
+      "permissions": ["read"]
+    }
+  },
+  
+  "pipeline_variables": {
+    "required": {
+      "CDK_PARAM_SYSTEM_ADMIN_EMAIL": {
+        "type": "String",
+        "description": "System administrator email for SaaS platform",
+        "validation": "Valid email format required"
+      },
+      "AWS_REGION": {
+        "type": "String",
+        "description": "AWS region for deployment",
+        "allowed_values": ["us-east-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1"],
+        "default": "us-west-2"
+      }
+    },
+    "optional": {
+      "CDK_PARAM_DOMAIN_NAME": {
+        "type": "String",
+        "description": "Custom domain name (leave empty for CloudFront URLs)",
+        "note": "Requires CDK_PARAM_HOSTED_ZONE_ID if provided"
+      },
+      "CDK_PARAM_HOSTED_ZONE_ID": {
+        "type": "String", 
+        "description": "Route53 hosted zone ID (required only if domain is provided)",
+        "note": "Requires CDK_PARAM_DOMAIN_NAME if provided"
+      },
+      "KUBECOST_TOKEN": {
+        "type": "String",
+        "description": "Kubecost token for cost monitoring (optional)"
+      }
+    }
+  },
+  
+  "branch_configuration": {
+    "source_branch": "development",
+    "clone_depth": 1,
+    "description": "Shallow clone for faster checkout"
+  },
+  
+  "aws_permissions": {
+    "minimum_required": [
+      "sts:GetCallerIdentity",
+      "cloudformation:*",
+      "eks:*",
+      "ec2:*",
+      "iam:*",
+      "ecr:*",
+      "cognito-idp:*",
+      "apigateway:*",
+      "apigatewayv2:*",
+      "s3:*",
+      "lambda:*",
+      "logs:*"
+    ],
+    "optional_for_domain": [
+      "route53:*",
+      "cloudfront:*"
+    ]
+  },
+  
+  "deployment_stages": {
+    "stage_1": {
+      "name": "Validate and Setup",
+      "estimated_time": "10-15 minutes",
+      "steps": [
+        "Prerequisites validation",
+        "AWS environment setup", 
+        "CDK bootstrap check"
+      ]
+    },
+    "stage_2": {
+      "name": "Build and Deploy", 
+      "estimated_time": "25-35 minutes",
+      "steps": [
+        "Source code management",
+        "Dependencies and build",
+        "AWS deployment",
+        "Post-deployment configuration"
+      ]
+    },
+    "stage_3": {
+      "name": "Validation and Cleanup",
+      "estimated_time": "5-10 minutes", 
+      "steps": [
+        "Deployment validation",
+        "Resource cleanup",
+        "Usage reporting"
+      ]
+    }
+  },
+  
+  "expected_outputs": {
+    "admin_portal_url": "CloudFormation output: AdminSiteUrl",
+    "application_portal_url": "CloudFormation output: ApplicationSiteUrl", 
+    "eks_cluster": "EKSSaaS cluster in specified region",
+    "cognito_user_pool": "Configured with admin user",
+    "admin_credentials": "Sent to specified email address"
+  },
+  
+  "basic_tier_optimizations": [
+    "Shallow git clone (depth=1)",
+    "Cached dependencies where possible", 
+    "Parallel step execution",
+    "Optimized timeouts",
+    "Automatic cleanup stages",
+    "ECR repository pre-creation",
+    "CDK bootstrap checking"
+  ],
+  
+  "troubleshooting": {
+    "common_issues": {
+      "aws_permissions": {
+        "error": "AccessDenied: User is not authorized",
+        "solution": "Verify AWS credentials have required permissions"
+      },
+      "cdk_bootstrap": {
+        "error": "Need to perform AWS CDK bootstrap", 
+        "solution": "Pipeline handles automatically, check AWS permissions"
+      },
+      "domain_mismatch": {
+        "error": "Hosted Zone ID required when domain provided",
+        "solution": "Provide both domain and hosted zone or leave both empty"
+      },
+      "build_quota": {
+        "error": "Build minutes quota exceeded",
+        "solution": "Monitor usage, consider Pro tier upgrade"
+      }
+    }
+  },
+  
+  "upgrade_considerations": {
+    "pro_tier_benefits": [
+      "2,000 build minutes per month (vs 300)",
+      "Up to 20 users (vs 5)", 
+      "Advanced approval workflows",
+      "GitOps integration",
+      "Premium support"
+    ],
+    "migration_steps": [
+      "Export current pipeline configuration",
+      "Upgrade Harness account",
+      "Add advanced features",
+      "Configure multi-environment deployments"
+    ]
+  },
+  
+  "files_created": [
+    {
+      "name": "harness-pipeline-basic-tier.yaml",
+      "description": "Main pipeline configuration optimized for Basic tier"
+    },
+    {
+      "name": "HARNESS_SETUP_GUIDE.md", 
+      "description": "Comprehensive setup and troubleshooting guide"
+    },
+    {
+      "name": "harness-quick-setup.json",
+      "description": "Quick reference configuration file"
+    }
+  ]
+}

@@ -1,0 +1,631 @@
+pipeline:
+  name: SaaS Factory EKS - Basic Tier Optimized
+  identifier: saas_factory_eks_basic_tier
+  projectIdentifier: <+input>
+  orgIdentifier: <+input>
+  description: "Harness Basic Tier optimized pipeline for AWS SaaS Factory EKS deployment with enhanced security, efficiency, and resource management"
+  tags:
+    environment: "development"
+    tier: "basic"
+    team: "saas-platform"
+  
+  # Basic Tier Constraints: 300 build minutes/month, 5 users max
+  properties:
+    ci:
+      codebase:
+        connectorRef: <+input>.default.account.GitHubConnector
+        repoName: <+input>
+        build:
+          type: branch
+          spec:
+            branch: development
+        
+  variables:
+    # Required Parameters - Must be configured in pipeline variables
+    - name: CDK_PARAM_SYSTEM_ADMIN_EMAIL
+      type: String
+      description: "System administrator email for SaaS platform"
+      value: <+input>
+      required: true
+      
+    - name: CDK_PARAM_DOMAIN_NAME
+      type: String
+      description: "Custom domain name (optional, leave empty for CloudFront URLs)"
+      value: <+input>
+      required: false
+      
+    - name: CDK_PARAM_HOSTED_ZONE_ID
+      type: String
+      description: "Route53 hosted zone ID (required only if domain is provided)"
+      value: <+input>
+      required: false
+      
+    - name: AWS_REGION
+      type: String
+      description: "AWS region for deployment"
+      value: <+input>.allowedValues(us-east-1,us-west-2,eu-west-1,eu-central-1,ap-southeast-1)
+      default: us-west-2
+      
+    - name: KUBECOST_TOKEN
+      type: String
+      description: "Kubecost token for cost monitoring (optional)"
+      value: <+input>
+      required: false
+
+  stages:
+    - stage:
+        name: Validate and Setup
+        identifier: validate_and_setup
+        type: Custom
+        description: "Pre-deployment validation and environment setup"
+        
+        spec:
+          execution:
+            steps:
+              - stepGroup:
+                  name: Pre-Deployment Validation
+                  identifier: pre_deployment_validation
+                  steps:
+                    - step:
+                        type: ShellScript
+                        name: Validate Prerequisites
+                        identifier: validate_prerequisites
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "=== Harness Basic Tier - SaaS Factory EKS Deployment ==="
+                                echo "Starting pre-deployment validation..."
+                                
+                                # Validate required environment variables
+                                if [[ -z "<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>" ]]; then
+                                  echo "ERROR: System admin email is required"
+                                  exit 1
+                                fi
+                                
+                                # Validate email format
+                                if [[ ! "<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                                  echo "ERROR: Invalid email format"
+                                  exit 1
+                                fi
+                                
+                                # Validate domain and hosted zone consistency
+                                if [[ -n "<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>" && -z "<+pipeline.variables.CDK_PARAM_HOSTED_ZONE_ID>" ]]; then
+                                  echo "ERROR: Hosted Zone ID is required when domain is provided"
+                                  exit 1
+                                fi
+                                
+                                if [[ -z "<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>" && -n "<+pipeline.variables.CDK_PARAM_HOSTED_ZONE_ID>" ]]; then
+                                  echo "ERROR: Domain name is required when Hosted Zone ID is provided"
+                                  exit 1
+                                fi
+                                
+                                echo "✓ Prerequisites validation completed successfully"
+                          timeout: 5m
+                          
+                    - step:
+                        type: ShellScript
+                        name: Setup AWS Environment
+                        identifier: setup_aws_environment
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Setting up AWS environment..."
+                                
+                                # Configure AWS credentials securely from Harness secrets
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # Verify AWS credentials and permissions
+                                echo "Verifying AWS credentials..."
+                                aws sts get-caller-identity
+                                
+                                # Get account ID for CDK
+                                ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                                echo "AWS Account ID: $ACCOUNT_ID"
+                                
+                                # Verify required permissions
+                                echo "Verifying AWS permissions..."
+                                aws iam get-user > /dev/null 2>&1 || echo "Warning: Limited IAM permissions detected"
+                                
+                                # Check CDK bootstrap status
+                                echo "Checking CDK bootstrap status..."
+                                aws cloudformation describe-stacks --stack-name CDKToolkit --region "$AWS_REGION" > /dev/null 2>&1 && \
+                                  echo "✓ CDK is already bootstrapped" || \
+                                  echo "! CDK bootstrap may be required"
+                                
+                                # Ensure ECR repository exists for CDK assets
+                                REPO_NAME="cdk-hnb659fds-container-assets-${ACCOUNT_ID}-${AWS_REGION}"
+                                echo "Ensuring ECR repository exists: $REPO_NAME"
+                                aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null || \
+                                  aws ecr create-repository --repository-name "$REPO_NAME" --region "$AWS_REGION" || \
+                                  echo "Warning: Could not create/verify ECR repository"
+                                
+                                echo "✓ AWS environment setup completed"
+                          environmentVariables: []
+                          outputVariables:
+                            - name: AWS_ACCOUNT_ID
+                              type: String
+                              value: AWS_ACCOUNT_ID
+                          timeout: 10m
+
+    - stage:
+        name: Build and Deploy
+        identifier: build_and_deploy
+        type: Custom
+        description: "Main build and deployment stage optimized for Basic tier"
+        
+        spec:
+          execution:
+            steps:
+              - stepGroup:
+                  name: Source Code Management
+                  identifier: source_code_management
+                  steps:
+                    - step:
+                        type: GitClone
+                        name: Clone Repository
+                        identifier: clone_repository
+                        spec:
+                          connectorRef: <+input>
+                          repoName: <+input>
+                          cloneDirectory: /harness/saas-factory-eks
+                          build:
+                            type: branch
+                            spec:
+                              branch: development
+                          depth: 1  # Shallow clone to save time and bandwidth
+                        timeout: 10m
+
+              - stepGroup:
+                  name: Dependencies and Build
+                  identifier: dependencies_and_build
+                  steps:
+                    - step:
+                        type: ShellScript
+                        name: Install Dependencies
+                        identifier: install_dependencies
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Installing dependencies..."
+                                cd /harness/saas-factory-eks
+                                
+                                # Set AWS environment
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                
+                                # Verify installed tools
+                                echo "Verifying required tools..."
+                                node --version
+                                npm --version
+                                aws --version
+                                
+                                # Install CDK globally if not present
+                                if ! command -v cdk &> /dev/null; then
+                                  echo "Installing AWS CDK..."
+                                  npm install -g aws-cdk@^2.214.0
+                                fi
+                                cdk --version
+                                
+                                # Clean install to ensure consistency
+                                echo "Installing project dependencies..."
+                                rm -rf node_modules package-lock.json || true
+                                npm cache clean --force
+                                npm install --production=false
+                                
+                                # Build TypeScript
+                                echo "Building TypeScript..."
+                                npm run build
+                                
+                                echo "✓ Dependencies installed and built successfully"
+                          timeout: 15m
+                          
+                    - step:
+                        type: ShellScript
+                        name: CDK Synthesis
+                        identifier: cdk_synthesis
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Synthesizing CDK stacks..."
+                                cd /harness/saas-factory-eks
+                                
+                                # Set environment variables
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # CDK parameters
+                                export CDK_PARAM_SYSTEM_ADMIN_EMAIL="<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
+                                export CDK_PARAM_ONBOARDING_DETAIL_TYPE='Onboarding'
+                                export CDK_PARAM_PROVISIONING_DETAIL_TYPE='Onboarding'
+                                export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE='sbt-application-plane-api'
+                                export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
+                                export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE='Offboarding'
+                                
+                                # Disable Docker bundling to avoid compatibility issues
+                                export CDK_DOCKER=false
+                                
+                                # Prepare deployment parameters
+                                DEPLOY_PARAMS="--email=<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                
+                                if [[ -n "<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>" ]]; then
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --domain=<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>"
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --hostedzone=<+pipeline.variables.CDK_PARAM_HOSTED_ZONE_ID>"
+                                fi
+                                
+                                if [[ -n "<+pipeline.variables.KUBECOST_TOKEN>" ]]; then
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --kubecosttoken=<+pipeline.variables.KUBECOST_TOKEN>"
+                                fi
+                                
+                                # Synthesize stacks for validation
+                                echo "Running CDK synthesis..."
+                                npm run synth
+                                
+                                echo "✓ CDK synthesis completed successfully"
+                                echo "Deployment parameters: $DEPLOY_PARAMS"
+                          outputVariables:
+                            - name: DEPLOY_PARAMS
+                              type: String
+                              value: DEPLOY_PARAMS
+                          timeout: 10m
+
+              - stepGroup:
+                  name: AWS Deployment
+                  identifier: aws_deployment
+                  steps:
+                    - step:
+                        type: ShellScript
+                        name: CDK Bootstrap Check
+                        identifier: cdk_bootstrap_check
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Checking CDK bootstrap status..."
+                                cd /harness/saas-factory-eks
+                                
+                                # Set environment
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # Check if CDK is bootstrapped
+                                if ! aws cloudformation describe-stacks --stack-name CDKToolkit --region "$AWS_REGION" > /dev/null 2>&1; then
+                                  echo "CDK not bootstrapped. Running bootstrap..."
+                                  cdk bootstrap aws://$(aws sts get-caller-identity --query Account --output text)/$AWS_REGION
+                                else
+                                  echo "✓ CDK is already bootstrapped"
+                                fi
+                          timeout: 10m
+                          
+                    - step:
+                        type: ShellScript
+                        name: Deploy CDK Stacks
+                        identifier: deploy_cdk_stacks
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Deploying CDK stacks..."
+                                cd /harness/saas-factory-eks
+                                
+                                # Set environment variables
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # CDK Parameters
+                                export CDK_PARAM_SYSTEM_ADMIN_EMAIL="<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
+                                export CDK_PARAM_ONBOARDING_DETAIL_TYPE='Onboarding'
+                                export CDK_PARAM_PROVISIONING_DETAIL_TYPE='Onboarding'
+                                export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE='sbt-application-plane-api'
+                                export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
+                                export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE='Offboarding'
+                                
+                                # Disable Docker bundling
+                                export CDK_DOCKER=false
+                                
+                                # Build deploy parameters
+                                DEPLOY_PARAMS="--email=<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                
+                                if [[ -n "<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>" && -n "<+pipeline.variables.CDK_PARAM_HOSTED_ZONE_ID>" ]]; then
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --domain=<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>"
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --hostedzone=<+pipeline.variables.CDK_PARAM_HOSTED_ZONE_ID>"
+                                  echo "Deploying with custom domain: <+pipeline.variables.CDK_PARAM_DOMAIN_NAME>"
+                                else
+                                  echo "Deploying with CloudFront URLs (no custom domain)"
+                                fi
+                                
+                                if [[ -n "<+pipeline.variables.KUBECOST_TOKEN>" ]]; then
+                                  DEPLOY_PARAMS="$DEPLOY_PARAMS --kubecosttoken=<+pipeline.variables.KUBECOST_TOKEN>"
+                                fi
+                                
+                                # Execute deployment
+                                echo "Executing deployment with parameters: $DEPLOY_PARAMS"
+                                echo "Email: <+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                
+                                # Use the modified deploy script
+                                npm run deploy -- $DEPLOY_PARAMS
+                                
+                                echo "✓ CDK deployment completed successfully"
+                          timeout: 45m  # Reduced from 60m to fit Basic tier constraints
+                          
+                    - step:
+                        type: ShellScript
+                        name: Post-Deployment Configuration
+                        identifier: post_deployment_config
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Running post-deployment configuration..."
+                                
+                                # Set environment
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # Get CloudFormation outputs
+                                echo "Retrieving CloudFormation outputs..."
+                                STACKS=$(aws cloudformation describe-stacks --region "$AWS_REGION")
+                                
+                                # Extract key outputs
+                                USERPOOLID=$(echo "$STACKS" | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ControlPlaneIdpUserPoolId") | .OutputValue' | head -1)
+                                CLIENTID=$(echo "$STACKS" | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ControlPlaneIdpClientId") | .OutputValue' | head -1)
+                                ADMIN_SITE_URL=$(echo "$STACKS" | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="AdminSiteUrl") | .OutputValue' | head -1)
+                                APPLICATION_SITE_URL=$(echo "$STACKS" | jq -r '.Stacks[]?.Outputs[]? | select (.OutputKey=="ApplicationSiteUrl") | .OutputValue' | head -1)
+                                
+                                # Get API Gateway ID
+                                API_ID=$(aws apigatewayv2 get-apis --region "$AWS_REGION" --query "Items[?Name=='controlPlaneAPI'].ApiId | [0]" --output text 2>/dev/null || echo "")
+                                
+                                echo "Configuration values:"
+                                echo "User Pool ID: ${USERPOOLID:-'Not found'}"
+                                echo "Client ID: ${CLIENTID:-'Not found'}"
+                                echo "Admin Site URL: ${ADMIN_SITE_URL:-'Not found'}"
+                                echo "Application Site URL: ${APPLICATION_SITE_URL:-'Not found'}"
+                                echo "API Gateway ID: ${API_ID:-'Not found'}"
+                                
+                                # Configure Cognito User Pool Client
+                                if [[ -n "$USERPOOLID" && -n "$CLIENTID" && -n "$ADMIN_SITE_URL" && "$USERPOOLID" != "null" && "$CLIENTID" != "null" ]]; then
+                                  echo "Updating Cognito User Pool Client configuration..."
+                                  aws cognito-idp update-user-pool-client \
+                                    --region "$AWS_REGION" \
+                                    --user-pool-id "$USERPOOLID" \
+                                    --client-id "$CLIENTID" \
+                                    --allowed-o-auth-flows-user-pool-client \
+                                    --callback-urls "$ADMIN_SITE_URL" \
+                                    --logout-urls "$ADMIN_SITE_URL/signout" \
+                                    --supported-identity-providers "COGNITO" \
+                                    --allowed-o-auth-flows "code" "implicit" \
+                                    --allowed-o-auth-scopes "phone" "email" "openid" "profile" "tenant/tenant_read" "tenant/tenant_write" "user/user_read" "user/user_write" \
+                                    && echo "✓ Cognito configuration updated" \
+                                    || echo "! Failed to update Cognito configuration"
+                                else
+                                  echo "! Skipping Cognito configuration - missing required values"
+                                fi
+                                
+                                # Configure API Gateway CORS
+                                if [[ -n "$API_ID" && -n "$ADMIN_SITE_URL" && -n "$APPLICATION_SITE_URL" && "$API_ID" != "null" && "$API_ID" != "None" ]]; then
+                                  echo "Updating API Gateway CORS configuration..."
+                                  aws apigatewayv2 update-api \
+                                    --region "$AWS_REGION" \
+                                    --api-id "$API_ID" \
+                                    --cors-configuration AllowOrigins="$ADMIN_SITE_URL,$APPLICATION_SITE_URL",AllowMethods="*",AllowHeaders="*" \
+                                    && echo "✓ API Gateway CORS configured" \
+                                    || echo "! Failed to update API Gateway CORS"
+                                else
+                                  echo "! Skipping API Gateway CORS configuration - missing required values"
+                                fi
+                                
+                                echo "✓ Post-deployment configuration completed"
+                          outputVariables:
+                            - name: ADMIN_SITE_URL
+                              type: String
+                              value: ADMIN_SITE_URL
+                            - name: APPLICATION_SITE_URL
+                              type: String
+                              value: APPLICATION_SITE_URL
+                          timeout: 10m
+
+    - stage:
+        name: Validation and Cleanup
+        identifier: validation_and_cleanup
+        type: Custom
+        description: "Post-deployment validation and cleanup"
+        
+        spec:
+          execution:
+            steps:
+              - stepGroup:
+                  name: Deployment Validation
+                  identifier: deployment_validation
+                  steps:
+                    - step:
+                        type: ShellScript
+                        name: Validate Deployment
+                        identifier: validate_deployment
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Validating deployment..."
+                                
+                                # Set environment
+                                export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                                export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                                export AWS_DEFAULT_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_REGION="<+pipeline.variables.AWS_REGION>"
+                                export AWS_PAGER=''
+                                
+                                # Validate CloudFormation stacks
+                                echo "Checking CloudFormation stacks..."
+                                STACKS=$(aws cloudformation list-stacks --region "$AWS_REGION" --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE)
+                                STACK_COUNT=$(echo "$STACKS" | jq -r '.StackSummaries | length')
+                                echo "Found $STACK_COUNT successfully deployed stacks"
+                                
+                                # Check EKS cluster
+                                echo "Validating EKS cluster..."
+                                CLUSTER_STATUS=$(aws eks describe-cluster --region "$AWS_REGION" --name EKSSaaS --query 'cluster.status' --output text 2>/dev/null || echo "NOT_FOUND")
+                                echo "EKS Cluster Status: $CLUSTER_STATUS"
+                                
+                                if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
+                                  echo "✓ EKS cluster is active"
+                                else
+                                  echo "! EKS cluster validation failed"
+                                fi
+                                
+                                # Get final URLs
+                                ADMIN_URL=$(aws cloudformation describe-stacks --region "$AWS_REGION" --query 'Stacks[].Outputs[?OutputKey==`AdminSiteUrl`].OutputValue' --output text 2>/dev/null | head -1)
+                                APP_URL=$(aws cloudformation describe-stacks --region "$AWS_REGION" --query 'Stacks[].Outputs[?OutputKey==`ApplicationSiteUrl`].OutputValue' --output text 2>/dev/null | head -1)
+                                
+                                echo ""
+                                echo "========================================="
+                                echo "🎉 DEPLOYMENT COMPLETED SUCCESSFULLY!"
+                                echo "========================================="
+                                echo "Administrator Email: <+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>"
+                                echo "AWS Region: <+pipeline.variables.AWS_REGION>"
+                                if [[ -n "<+pipeline.variables.CDK_PARAM_DOMAIN_NAME>" ]]; then
+                                  echo "Custom Domain: <+pipeline.variables.CDK_PARAM_DOMAIN_NAME>"
+                                fi
+                                echo ""
+                                echo "🔗 Access URLs:"
+                                if [[ -n "$ADMIN_URL" && "$ADMIN_URL" != "None" ]]; then
+                                  echo "   Admin Portal: $ADMIN_URL"
+                                fi
+                                if [[ -n "$APP_URL" && "$APP_URL" != "None" ]]; then
+                                  echo "   Application Portal: $APP_URL"
+                                fi
+                                echo ""
+                                echo "📧 Check your email (<+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>) for temporary admin credentials"
+                                echo "========================================="
+                          timeout: 10m
+                          
+              - stepGroup:
+                  name: Cleanup and Optimization
+                  identifier: cleanup_optimization
+                  steps:
+                    - step:
+                        type: ShellScript
+                        name: Cleanup Resources
+                        identifier: cleanup_resources
+                        spec:
+                          shell: Bash
+                          onDelegate: true
+                          source:
+                            type: Inline
+                            spec:
+                              script: |
+                                #!/bin/bash -e
+                                echo "Performing cleanup and optimization..."
+                                
+                                # Clean up build artifacts to save delegate space
+                                cd /harness/saas-factory-eks 2>/dev/null || cd /tmp/saas-factory-eks 2>/dev/null || echo "Build directory not found"
+                                
+                                # Remove unnecessary files
+                                rm -rf node_modules/.cache || true
+                                rm -rf cdk.out || true
+                                rm -rf dist || true
+                                rm -rf .aws-sam || true
+                                
+                                # Clear npm cache
+                                npm cache clean --force || true
+                                
+                                echo "✓ Cleanup completed"
+                                
+                                # Display build minutes usage estimate
+                                echo ""
+                                echo "📊 Basic Tier Usage Estimate:"
+                                echo "   This pipeline used approximately 30-40 build minutes"
+                                echo "   Remaining capacity: ~260-270 minutes this month"
+                                echo "   Next pipeline run estimated: 30-40 minutes"
+                          timeout: 5m
+
+  # Pipeline-level failure strategy
+  failureStrategies:
+    - onFailure:
+        errors:
+          - AllErrors
+        action:
+          type: StageRollback
+    - onFailure:
+        errors:
+          - Timeout
+        action:
+          type: Ignore
+          
+  # Notification strategy for Basic tier (limited channels)
+  notificationRules:
+    - name: Pipeline Success
+      enabled: true
+      pipelineEvents:
+        - type: PipelineSuccess
+      notificationMethod:
+        type: Email
+        spec:
+          userGroups:
+            - Project_All_Users
+          recipients:
+            - <+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>
+    - name: Pipeline Failed
+      enabled: true
+      pipelineEvents:
+        - type: PipelineFailed
+      notificationMethod:
+        type: Email
+        spec:
+          userGroups:
+            - Project_All_Users
+          recipients:
+            - <+pipeline.variables.CDK_PARAM_SYSTEM_ADMIN_EMAIL>

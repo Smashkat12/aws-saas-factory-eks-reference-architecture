@@ -48,9 +48,10 @@ Navigate to **Project Settings** → **Secrets** and verify you have the followi
 ## Step 2: GitHub Connector
 
 ### Already Configured
-✅ You already have a GitHub connector configured at the account level that has access to all repositories in your GitHub account.
+✅ You already have a GitHub connector configured in your testing project that has access to all repositories in your GitHub account.
 
-**Connector Reference**: `account.Github`
+**Connector Reference**: `Github` (project-scoped)
+**Scope**: Testing Project
 
 No additional configuration needed for this step.
 
