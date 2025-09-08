@@ -1,0 +1,61 @@
+template:
+  name: CDK Deployment Template
+  identifier: cdk_deployment
+  versionLabel: v1
+  type: CustomDeployment
+  projectIdentifier: default_project
+  orgIdentifier: default
+  description: Reusable template for CDK deployments
+  tags: {}
+  spec:
+    infrastructure:
+      variables:
+        - name: aws_region
+          type: String
+          description: AWS Region for deployment
+        - name: account_id
+          type: String
+          description: AWS Account ID
+    execution:
+      steps:
+        - step:
+            type: ShellScript
+            name: Setup CDK Environment
+            identifier: setup_cdk
+            spec:
+              shell: Bash
+              onDelegate: true
+              source:
+                type: Inline
+                spec:
+                  script: |
+                    # Install CDK if not present
+                    npm install -g aws-cdk
+                    
+                    # Set environment variables
+                    export AWS_REGION=<+infra.variables.aws_region>
+                    export ACCOUNT_ID=<+infra.variables.account_id>
+                    
+                    # Verify CDK installation
+                    cdk --version
+        - step:
+            type: ShellScript
+            name: Deploy with CDK
+            identifier: deploy_cdk
+            spec:
+              shell: Bash
+              onDelegate: true
+              source:
+                type: Inline
+                spec:
+                  script: |
+                    # Load configuration
+                    export EMAIL=$(yq e '.deployment.email' harness-config.yaml)
+                    export DOMAIN=$(yq e '.deployment.domain' harness-config.yaml)
+                    export HOSTED_ZONE=$(yq e '.deployment.hostedzone' harness-config.yaml)
+                    
+                    # Deploy infrastructure
+                    npx cdk deploy --all --require-approval never \
+                      --context email=${EMAIL} \
+                      --context domain=${DOMAIN} \
+                      --context hostedZoneId=${HOSTED_ZONE}

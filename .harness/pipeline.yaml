@@ -1,0 +1,125 @@
+pipeline:
+  name: SaaS Factory EKS Deployment
+  identifier: saas_factory_eks_deployment
+  projectIdentifier: default_project
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: Build and Test
+        identifier: build_test
+        description: Build CDK application and run tests
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Install Dependencies
+                  identifier: install_deps
+                  spec:
+                    shell: Bash
+                    command: |
+                      npm ci
+                      npm run build
+              - step:
+                  type: Run
+                  name: Run Tests
+                  identifier: run_tests
+                  spec:
+                    shell: Bash
+                    command: |
+                      npm test
+              - step:
+                  type: Run
+                  name: CDK Synth
+                  identifier: cdk_synth
+                  spec:
+                    shell: Bash
+                    command: |
+                      npx cdk synth
+    
+    - stage:
+        name: Deploy Infrastructure
+        identifier: deploy_infrastructure
+        description: Deploy EKS infrastructure using CDK
+        type: Deployment
+        spec:
+          deploymentType: CustomDeployment
+          customDeploymentRef:
+            templateRef: cdk_deployment
+            versionLabel: v1
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: CDK Bootstrap
+                  identifier: cdk_bootstrap
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          npx cdk bootstrap aws://${ACCOUNT_ID}/${AWS_REGION}
+              - step:
+                  type: ShellScript
+                  name: CDK Deploy
+                  identifier: cdk_deploy
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          npx cdk deploy --all --require-approval never
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+    
+    - stage:
+        name: Post-Deployment Validation
+        identifier: post_deployment_validation
+        description: Validate deployed infrastructure
+        type: CI
+        spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Validate EKS Cluster
+                  identifier: validate_eks
+                  spec:
+                    shell: Bash
+                    command: |
+                      aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION}
+                      kubectl get nodes
+              - step:
+                  type: Run
+                  name: Run Health Checks
+                  identifier: health_checks
+                  spec:
+                    shell: Bash
+                    command: |
+                      kubectl get pods --all-namespaces
+                      kubectl get services --all-namespaces

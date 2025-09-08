@@ -1,0 +1,26 @@
+trigger:
+  name: Main Branch Push Trigger
+  identifier: main_branch_push
+  enabled: true
+  description: Trigger pipeline on push to main branch
+  tags: {}
+  orgIdentifier: default
+  projectIdentifier: default_project
+  pipelineIdentifier: saas_factory_eks_deployment
+  source:
+    type: Webhook
+    spec:
+      type: Github
+      spec:
+        type: Push
+        spec:
+          connectorRef: github_connector
+          autoAbortPreviousExecutions: false
+          payloadConditions:
+            - key: targetBranch
+              operator: Equals
+              value: main
+          headerConditions: []
+          actions: []
+  inputSetRefs:
+    - prod_input_set

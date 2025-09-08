@@ -1,0 +1,20 @@
+inputSet:
+  identifier: dev_input_set
+  name: Development Environment Input Set
+  orgIdentifier: default
+  projectIdentifier: default_project
+  pipeline:
+    identifier: saas_factory_eks_deployment
+    variables:
+      - name: ENV
+        type: String
+        value: development
+      - name: AWS_REGION
+        type: String
+        value: us-east-1
+      - name: CLUSTER_NAME
+        type: String
+        value: saas-factory-dev-cluster
+      - name: ACCOUNT_ID
+        type: String
+        value: "<+account.complianceStatus>"

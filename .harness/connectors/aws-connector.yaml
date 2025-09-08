@@ -1,0 +1,16 @@
+connector:
+  name: AWS Connector
+  identifier: aws_connector
+  description: AWS connector for CDK deployments
+  orgIdentifier: default
+  projectIdentifier: default_project
+  type: Aws
+  spec:
+    credential:
+      type: ManualConfig
+      spec:
+        accessKey: <+secrets.getValue("aws_access_key")>
+        secretKey: <+secrets.getValue("aws_secret_key")>
+    delegateSelectors:
+      - harness-delegate
+    executeOnDelegate: true
