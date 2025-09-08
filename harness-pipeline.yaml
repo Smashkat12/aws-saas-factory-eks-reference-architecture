@@ -1,0 +1,508 @@
+pipeline:
+  name: AWS SaaS Factory EKS Deployment
+  identifier: aws_saas_factory_eks_deployment
+  projectIdentifier: <+project.identifier>
+  orgIdentifier: <+org.identifier>
+  description: Deploy AWS SaaS Factory EKS Reference Architecture from development branch
+  tags:
+    environment: production
+    application: saas-factory
+    deployment: cdk
+  
+  properties:
+    ci:
+      codebase:
+        connectorRef: account.Github
+        repoName: Smashkat12/aws-saas-factory-eks-reference-architecture
+        build: <+input>
+        
+  variables:
+    - name: SYSTEM_ADMIN_EMAIL
+      type: String
+      description: System administrator email for deployment
+      required: true
+      value: <+input>
+    - name: AWS_REGION
+      type: String
+      description: AWS region for deployment
+      default: eu-west-1
+      value: <+input>.default(eu-west-1)
+    - name: DOMAIN
+      type: String
+      description: Custom domain
+      default: thinkm8.co.uk
+      value: <+input>.default(thinkm8.co.uk)
+    - name: HOSTED_ZONE_ID
+      type: String
+      description: Route53 hosted zone ID
+      default: Z0494651P0BXWLJV1MEX
+      value: <+input>.default(Z0494651P0BXWLJV1MEX)
+      
+  stages:
+    - stage:
+        name: Setup and Validate
+        identifier: setup_validate
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - stepGroup:
+                  name: Environment Setup
+                  identifier: environment_setup
+                  steps:
+                    - step:
+                        type: Run
+                        name: Setup Node.js 20.x
+                        identifier: setup_nodejs
+                        spec:
+                          shell: Bash
+                          command: |
+                            echo "Installing Node.js 20.x..."
+                            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                            sudo apt-get install -y nodejs
+                            
+                            echo "Node version: $(node --version)"
+                            echo "NPM version: $(npm --version)"
+                          
+                    - step:
+                        type: Run
+                        name: Install AWS CDK
+                        identifier: install_cdk
+                        spec:
+                          shell: Bash
+                          command: |
+                            echo "Installing AWS CDK globally..."
+                            sudo npm install -g aws-cdk@2.190.0
+                            
+                            echo "CDK version: $(cdk --version)"
+                            
+                    - step:
+                        type: Run
+                        name: Install AWS CLI and Tools
+                        identifier: install_aws_cli
+                        spec:
+                          shell: Bash
+                          command: |
+                            echo "Installing AWS CLI v2..."
+                            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                            unzip -q awscliv2.zip
+                            sudo ./aws/install
+                            rm -rf awscliv2.zip aws/
+                            
+                            echo "Installing jq..."
+                            sudo apt-get update && sudo apt-get install -y jq
+                            
+                            echo "AWS CLI version: $(aws --version)"
+                            echo "jq version: $(jq --version)"
+                            
+              - stepGroup:
+                  name: AWS Configuration
+                  identifier: aws_configuration
+                  steps:
+                    - step:
+                        type: Run
+                        name: Configure AWS Credentials
+                        identifier: configure_aws
+                        spec:
+                          shell: Bash
+                          command: |
+                            echo "Configuring AWS credentials..."
+                            
+                            # Export AWS credentials from Harness secrets
+                            export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_testing")>
+                            export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_key_testing")>
+                            export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                            
+                            # Configure AWS CLI
+                            aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+                            aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+                            aws configure set region $AWS_DEFAULT_REGION
+                            
+                            # Verify credentials
+                            echo "Verifying AWS credentials..."
+                            aws sts get-caller-identity
+                            
+                            echo "AWS configuration completed successfully"
+                          envVariables:
+                            AWS_PAGER: ""
+                            
+                    - step:
+                        type: Run
+                        name: Pre-deployment Validation
+                        identifier: pre_deployment_validation
+                        spec:
+                          shell: Bash
+                          command: |
+                            echo "Validating deployment parameters..."
+                            
+                            # Validate email format
+                            EMAIL="<+pipeline.variables.SYSTEM_ADMIN_EMAIL>"
+                            if [[ ! "$EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                              echo "ERROR: Invalid email format: $EMAIL"
+                              exit 1
+                            fi
+                            echo "✓ Email validation passed: $EMAIL"
+                            
+                            # Check if domain and hosted zone are both provided or both empty
+                            DOMAIN="<+pipeline.variables.DOMAIN>"
+                            HOSTED_ZONE="<+pipeline.variables.HOSTED_ZONE_ID>"
+                            
+                            if [[ -n "$DOMAIN" && -z "$HOSTED_ZONE" ]]; then
+                              echo "ERROR: HOSTED_ZONE_ID is required when DOMAIN is provided"
+                              exit 1
+                            fi
+                            
+                            if [[ -z "$DOMAIN" && -n "$HOSTED_ZONE" ]]; then
+                              echo "ERROR: DOMAIN is required when HOSTED_ZONE_ID is provided"
+                              exit 1
+                            fi
+                            
+                            echo "✓ Domain configuration validation passed"
+                            echo "Deployment will proceed with:"
+                            echo "  - Email: $EMAIL"
+                            echo "  - Region: <+pipeline.variables.AWS_REGION>"
+                            [[ -n "$DOMAIN" ]] && echo "  - Domain: $DOMAIN"
+                            [[ -n "$HOSTED_ZONE" ]] && echo "  - Hosted Zone: $HOSTED_ZONE"
+                            
+    - stage:
+        name: Build and Deploy
+        identifier: build_deploy
+        type: CI
+        spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Install Dependencies
+                  identifier: install_dependencies
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Installing project dependencies..."
+                      npm ci
+                      
+                      echo "Dependencies installed successfully"
+                      echo "Package count: $(npm list --depth=0 | wc -l)"
+                  timeout: 10m
+                  
+              - step:
+                  type: Run
+                  name: Create ECR Repositories
+                  identifier: create_ecr_repos
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Creating ECR repositories for CDK assets..."
+                      
+                      # Export AWS credentials
+                      export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                      export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                      export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      
+                      # Get AWS account ID
+                      ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                      echo "AWS Account ID: $ACCOUNT_ID"
+                      
+                      # Create ECR repository for CDK assets if it doesn't exist
+                      REPO_NAME="cdk-hnb659fds-container-assets-${ACCOUNT_ID}-${AWS_DEFAULT_REGION}"
+                      
+                      if ! aws ecr describe-repositories --repository-names $REPO_NAME 2>/dev/null; then
+                        echo "Creating ECR repository: $REPO_NAME"
+                        aws ecr create-repository --repository-name $REPO_NAME || true
+                      else
+                        echo "ECR repository already exists: $REPO_NAME"
+                      fi
+                      
+                      # Create lifecycle policy to manage old images
+                      echo "Setting lifecycle policy for ECR repository..."
+                      cat > /tmp/lifecycle-policy.json <<EOF
+                      {
+                        "rules": [
+                          {
+                            "rulePriority": 1,
+                            "description": "Keep last 10 images",
+                            "selection": {
+                              "tagStatus": "any",
+                              "countType": "imageCountMoreThan",
+                              "countNumber": 10
+                            },
+                            "action": {
+                              "type": "expire"
+                            }
+                          }
+                        ]
+                      }
+                      EOF
+                      
+                      aws ecr put-lifecycle-policy \
+                        --repository-name $REPO_NAME \
+                        --lifecycle-policy-text file:///tmp/lifecycle-policy.json || true
+                      
+                      echo "ECR repository setup completed"
+                  timeout: 5m
+                  
+              - step:
+                  type: Run
+                  name: CDK Bootstrap
+                  identifier: cdk_bootstrap
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Checking CDK bootstrap status..."
+                      
+                      # Export AWS credentials
+                      export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                      export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                      export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      export AWS_PAGER=""
+                      
+                      # Get AWS account ID
+                      ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                      
+                      # Check if CDK is already bootstrapped
+                      if aws cloudformation describe-stacks --stack-name CDKToolkit --region $AWS_DEFAULT_REGION 2>/dev/null; then
+                        echo "CDK already bootstrapped in region $AWS_DEFAULT_REGION"
+                      else
+                        echo "Bootstrapping CDK in region $AWS_DEFAULT_REGION..."
+                        npx cdk bootstrap aws://$ACCOUNT_ID/$AWS_DEFAULT_REGION
+                      fi
+                      
+                      echo "CDK bootstrap check completed"
+                  timeout: 15m
+                  
+              - step:
+                  type: Run
+                  name: Deploy CDK Application
+                  identifier: deploy_cdk_app
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Starting CDK deployment..."
+                      
+                      # Export AWS credentials and environment variables
+                      export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                      export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                      export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      export AWS_PAGER=""
+                      
+                      # Set CDK deployment parameters
+                      export CDK_PARAM_SYSTEM_ADMIN_EMAIL="<+pipeline.variables.SYSTEM_ADMIN_EMAIL>"
+                      export REGION=$AWS_DEFAULT_REGION
+                      
+                      # Set CDK environment variables (from install.sh)
+                      export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
+                      export CDK_PARAM_ONBOARDING_DETAIL_TYPE='Onboarding'
+                      export CDK_PARAM_PROVISIONING_DETAIL_TYPE='Onboarding'
+                      export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE='sbt-application-plane-api'
+                      export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
+                      export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE='Offboarding'
+                      
+                      # Prepare deployment command
+                      DEPLOY_CMD="npm run deploy -- --email=$CDK_PARAM_SYSTEM_ADMIN_EMAIL"
+                      
+                      # Add domain parameters if provided
+                      DOMAIN="<+pipeline.variables.DOMAIN>"
+                      HOSTED_ZONE="<+pipeline.variables.HOSTED_ZONE_ID>"
+                      
+                      if [[ -n "$DOMAIN" && -n "$HOSTED_ZONE" ]]; then
+                        echo "Deploying with custom domain: $DOMAIN"
+                        DEPLOY_CMD="$DEPLOY_CMD --domain=$DOMAIN --hostedzone=$HOSTED_ZONE"
+                      else
+                        echo "Deploying with default domain configuration"
+                        # Use the default values for thinkm8.co.uk
+                        DEPLOY_CMD="$DEPLOY_CMD --domain=thinkm8.co.uk --hostedzone=Z0494651P0BXWLJV1MEX"
+                      fi
+                      
+                      echo "Executing: $DEPLOY_CMD"
+                      eval $DEPLOY_CMD
+                      
+                      echo "CDK deployment completed successfully"
+                  timeout: 60m
+                  
+              - step:
+                  type: Run
+                  name: Post-Deployment Configuration
+                  identifier: post_deployment_config
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Configuring post-deployment settings..."
+                      
+                      # Export AWS credentials
+                      export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                      export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                      export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      export AWS_PAGER=""
+                      
+                      # Get stack outputs
+                      echo "Retrieving CloudFormation stack outputs..."
+                      
+                      # Extract key values from stacks
+                      USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name controlplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='ControlPlaneIdpUserPoolId'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      CLIENT_ID=$(aws cloudformation describe-stacks --stack-name controlplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='ControlPlaneIdpClientId'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      ADMIN_SITE_URL=$(aws cloudformation describe-stacks --stack-name controlplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='AdminSiteUrl'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      APP_SITE_URL=$(aws cloudformation describe-stacks --stack-name appplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='AppSiteUrl'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      LANDING_SITE_URL=$(aws cloudformation describe-stacks --stack-name controlplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='LandingSiteUrl'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      API_ID=$(aws cloudformation describe-stacks --stack-name controlplane-stack \
+                        --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayId'].OutputValue" \
+                        --output text 2>/dev/null || echo "")
+                      
+                      # Update Cognito User Pool Client if we have the required values
+                      if [[ -n "$USER_POOL_ID" && -n "$CLIENT_ID" ]]; then
+                        echo "Updating Cognito User Pool Client configuration..."
+                        
+                        # Build callback URLs
+                        CALLBACK_URLS="[\"https://localhost:4200/\", \"https://localhost:4200/dashboard\"]"
+                        LOGOUT_URLS="[\"https://localhost:4200/\"]"
+                        
+                        if [[ -n "$ADMIN_SITE_URL" ]]; then
+                          CALLBACK_URLS="[\"$ADMIN_SITE_URL\", \"${ADMIN_SITE_URL}dashboard\", \"https://localhost:4200/\", \"https://localhost:4200/dashboard\"]"
+                          LOGOUT_URLS="[\"$ADMIN_SITE_URL\", \"https://localhost:4200/\"]"
+                        fi
+                        
+                        aws cognito-idp update-user-pool-client \
+                          --user-pool-id "$USER_POOL_ID" \
+                          --client-id "$CLIENT_ID" \
+                          --supported-identity-providers "COGNITO" \
+                          --callback-urls $CALLBACK_URLS \
+                          --logout-urls $LOGOUT_URLS \
+                          --allowed-o-auth-flows "code" "implicit" \
+                          --allowed-o-auth-scopes "email" "openid" "profile" \
+                          --allowed-o-auth-flows-user-pool-client || echo "Warning: Failed to update Cognito client"
+                      fi
+                      
+                      # Configure API Gateway CORS if API ID is available
+                      if [[ -n "$API_ID" && -n "$ADMIN_SITE_URL" && -n "$APP_SITE_URL" && -n "$LANDING_SITE_URL" ]]; then
+                        echo "Configuring API Gateway CORS..."
+                        
+                        CORS_ORIGINS="$ADMIN_SITE_URL,$APP_SITE_URL,$LANDING_SITE_URL,https://localhost:4200"
+                        
+                        aws apigatewayv2 update-api \
+                          --api-id "$API_ID" \
+                          --cors-configuration AllowOrigins="$CORS_ORIGINS",AllowMethods=GET,PUT,POST,DELETE,OPTIONS,AllowHeaders=*,MaxAge=86400 || echo "Warning: Failed to update CORS configuration"
+                      fi
+                      
+                      # Display deployment information
+                      echo "========================================="
+                      echo "DEPLOYMENT COMPLETED SUCCESSFULLY!"
+                      echo "========================================="
+                      [[ -n "$ADMIN_SITE_URL" ]] && echo "Admin Site URL: $ADMIN_SITE_URL"
+                      [[ -n "$APP_SITE_URL" ]] && echo "Application Site URL: $APP_SITE_URL"
+                      [[ -n "$LANDING_SITE_URL" ]] && echo "Landing Site URL: $LANDING_SITE_URL"
+                      echo "========================================="
+                      
+                      # Save outputs for notifications
+                      echo "$ADMIN_SITE_URL" > /tmp/admin_url.txt
+                      echo "$APP_SITE_URL" > /tmp/app_url.txt
+                      echo "$LANDING_SITE_URL" > /tmp/landing_url.txt
+                  timeout: 10m
+                  
+    - stage:
+        name: Validation
+        identifier: validation
+        type: CI
+        spec:
+          cloneCodebase: false
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Validate Deployment
+                  identifier: validate_deployment
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Validating deployment..."
+                      
+                      # Export AWS credentials
+                      export AWS_ACCESS_KEY_ID=<+secrets.getValue("aws_access_key_id")>
+                      export AWS_SECRET_ACCESS_KEY=<+secrets.getValue("aws_secret_access_key")>
+                      export AWS_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      export AWS_PAGER=""
+                      
+                      # Check CloudFormation stacks
+                      echo "Checking CloudFormation stacks..."
+                      
+                      STACKS=("controlplane-stack" "appplane-stack" "eks-cluster-stack")
+                      ALL_STACKS_READY=true
+                      
+                      for STACK in "${STACKS[@]}"; do
+                        STATUS=$(aws cloudformation describe-stacks --stack-name $STACK \
+                          --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NOT_FOUND")
+                        
+                        if [[ "$STATUS" == "CREATE_COMPLETE" || "$STATUS" == "UPDATE_COMPLETE" ]]; then
+                          echo "✓ Stack $STACK: $STATUS"
+                        else
+                          echo "✗ Stack $STACK: $STATUS"
+                          ALL_STACKS_READY=false
+                        fi
+                      done
+                      
+                      if [[ "$ALL_STACKS_READY" == "false" ]]; then
+                        echo "ERROR: Not all stacks deployed successfully"
+                        exit 1
+                      fi
+                      
+                      # Check EKS cluster
+                      echo "Checking EKS cluster status..."
+                      CLUSTER_STATUS=$(aws eks describe-cluster --name saas-factory-eks-cluster \
+                        --query "cluster.status" --output text 2>/dev/null || echo "NOT_FOUND")
+                      
+                      if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
+                        echo "✓ EKS Cluster: ACTIVE"
+                      else
+                        echo "✗ EKS Cluster: $CLUSTER_STATUS"
+                        echo "Warning: EKS cluster may still be provisioning"
+                      fi
+                      
+                      echo "Deployment validation completed successfully!"
+                  timeout: 5m
+                  
+  notificationRules:
+    - name: Pipeline Notifications
+      identifier: pipeline_notifications
+      pipelineEvents:
+        - type: PipelineSuccess
+        - type: PipelineFailed
+      notificationMethod:
+        type: Email
+        spec:
+          userGroups: []
+          recipients:
+            - <+pipeline.variables.SYSTEM_ADMIN_EMAIL>
+      enabled: true

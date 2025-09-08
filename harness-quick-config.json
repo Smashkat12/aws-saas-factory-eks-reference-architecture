@@ -1,0 +1,50 @@
+{
+  "pipeline_configuration": {
+    "name": "AWS SaaS Factory EKS Deployment",
+    "identifier": "aws_saas_factory_eks_deployment",
+    "description": "Deploy AWS SaaS Factory EKS Reference Architecture from development branch"
+  },
+  "existing_resources": {
+    "secrets": {
+      "aws_access_key": "aws_access_key_testing",
+      "aws_secret_key": "aws_secret_key_testing",
+      "location": "Testing Project Secrets"
+    },
+    "github_connector": {
+      "reference": "account.Github",
+      "scope": "Account level",
+      "access": "All repositories in GitHub account"
+    }
+  },
+  "default_values": {
+    "branch": "development",
+    "aws_region": "eu-west-1",
+    "domain": "thinkm8.co.uk",
+    "hosted_zone_id": "Z0494651P0BXWLJV1MEX",
+    "system_admin_email": "smashkat12@gmail.com"
+  },
+  "runtime_inputs": {
+    "required": [
+      "SYSTEM_ADMIN_EMAIL"
+    ],
+    "optional_with_defaults": [
+      "AWS_REGION (default: eu-west-1)",
+      "DOMAIN (default: thinkm8.co.uk)",
+      "HOSTED_ZONE_ID (default: Z0494651P0BXWLJV1MEX)"
+    ]
+  },
+  "estimated_execution_time": {
+    "setup_validate": "10 minutes",
+    "build_deploy": "45-60 minutes",
+    "validation": "5 minutes",
+    "total": "60-75 minutes"
+  },
+  "quick_start_steps": [
+    "1. Import harness-pipeline.yaml into your Testing project",
+    "2. Verify secrets aws_access_key_testing and aws_secret_key_testing exist",
+    "3. Run pipeline with SYSTEM_ADMIN_EMAIL = smashkat12@gmail.com",
+    "4. Accept all other defaults",
+    "5. Monitor execution (~60-75 minutes)",
+    "6. Access deployed applications via URLs in pipeline output"
+  ]
+}
