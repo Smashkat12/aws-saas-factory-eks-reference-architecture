@@ -158,6 +158,17 @@ pipeline:
                           export AWS_REGION=eu-west-1
                           export AWS_PAGER=''
                           
+                          # Get AWS Account ID
+                          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+                          echo "AWS Account ID: $ACCOUNT_ID"
+                          
+                          # Ensure ECR repository exists for CDK assets
+                          REPO_NAME="cdk-hnb659fds-container-assets-${ACCOUNT_ID}-${AWS_REGION}"
+                          echo "Checking/creating ECR repository: $REPO_NAME"
+                          
+                          aws ecr describe-repositories --repository-names "$REPO_NAME" 2>/dev/null || \
+                            aws ecr create-repository --repository-name "$REPO_NAME" --region "$AWS_REGION" || true
+                          
                           # Parameters for CDK (used by SBT)
                           export CDK_PARAM_SYSTEM_ADMIN_EMAIL="smashkat12@gmail.com"
                           export CDK_PARAM_CONTROL_PLANE_SOURCE='sbt-control-plane-api'
