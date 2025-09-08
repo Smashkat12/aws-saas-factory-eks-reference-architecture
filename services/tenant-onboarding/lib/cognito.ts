@@ -120,7 +120,11 @@ export class Cognito extends Construct {
 
         if (props.customAttributes) {
             Object.keys(props.customAttributes!).forEach(key => {
-                userAttributes.push({ name: `custom:${key}`, value: props.customAttributes![key].value.toString() });
+                const customAttribute = props.customAttributes![key];
+                // Add null/undefined check for the value property to prevent runtime errors
+                if (customAttribute && customAttribute.value !== null && customAttribute.value !== undefined) {
+                    userAttributes.push({ name: `custom:${key}`, value: customAttribute.value.toString() });
+                }
             })
         }
 
