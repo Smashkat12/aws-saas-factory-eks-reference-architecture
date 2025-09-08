@@ -10,7 +10,7 @@ pipeline:
   properties:
     ci:
       codebase:
-        connectorRef: github_connector
+        connectorRef: githubconnector
         repoName: saas-factory-eks
         build: <+input>
   variables:
@@ -198,28 +198,6 @@ pipeline:
                       ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
               - step:
                   type: ShellScript
-                  name: CDK Bootstrap
-                  identifier: cdk_bootstrap
-                  spec:
-                    shell: Bash
-                    onDelegate: true
-                    source:
-                      type: Inline
-                      spec:
-                        script: |
-                          # Configure AWS profile for CDK
-                          export AWS_PROFILE=default
-                          export CDK_DEFAULT_ACCOUNT=<+pipeline.variables.ACCOUNT_ID>
-                          export CDK_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
-                          
-                          # Bootstrap CDK in the target account/region
-                          npx cdk bootstrap aws://<+pipeline.variables.ACCOUNT_ID>/<+pipeline.variables.AWS_REGION> \
-                            --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
-                    envVariables:
-                      AWS_REGION: <+pipeline.variables.AWS_REGION>
-                      ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
-              - step:
-                  type: ShellScript
                   name: CDK Deploy
                   identifier: cdk_deploy
                   spec:
@@ -230,19 +208,18 @@ pipeline:
                       spec:
                         script: |
                           # Set environment variables for CDK deployment
-                          export AWS_PROFILE=default
                           export CDK_DEFAULT_ACCOUNT=<+pipeline.variables.ACCOUNT_ID>
                           export CDK_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
                           
+                          # Install dependencies if needed
+                          npm ci
+                          
                           # Deploy with all required context parameters
                           npx cdk deploy --all --require-approval never \
-                            --context email=<+pipeline.variables.EMAIL> \
-                            --context domain=<+pipeline.variables.DOMAIN> \
-                            --context hostedZoneId=<+pipeline.variables.HOSTED_ZONE_ID> \
-                            --context environment=<+pipeline.variables.ENV> \
-                            --parameters email=<+pipeline.variables.EMAIL> \
-                            --parameters domain=<+pipeline.variables.DOMAIN> \
-                            --parameters hostedZoneId=<+pipeline.variables.HOSTED_ZONE_ID>
+                            --context email=smashkat12@gmail.com \
+                            --context domain=thinkm8.co.uk \
+                            --context hostedzone=Z0494651P0BXWLJV1MEX \
+                            --context environment=<+pipeline.variables.ENV>
                     envVariables:
                       AWS_REGION: <+pipeline.variables.AWS_REGION>
                       ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
