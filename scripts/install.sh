@@ -2,21 +2,35 @@
 
 export AWS_PAGER=''
 export CDK_PARAM_SYSTEM_ADMIN_EMAIL="$1"
-CLOUD_9_INSTALL="$2"
+export CDK_PARAM_DOMAIN_NAME="$2"
+export CDK_PARAM_HOSTED_ZONE_ID="$3"
+CLOUD_9_INSTALL="$4"
 
 if [[ -z "$CDK_PARAM_SYSTEM_ADMIN_EMAIL" ]]; then
-  echo "Please provide system admin email"
+  echo "Please provide system admin email as first parameter"
   exit 1
 fi
 
-if [[ -z "$CLOUD_9_INSTALL" ]]; then
-  echo "Setting region..."
-  REGION=$(aws configure get region)
-else
-  echo "Setting region from instance metdata"
-  TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-  REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed 's/\(.*\)[a-z]/\1/')
+if [[ -z "$CDK_PARAM_DOMAIN_NAME" ]]; then
+  echo "Please provide domain name as second parameter"
+  exit 1
 fi
+
+if [[ -z "$CDK_PARAM_HOSTED_ZONE_ID" ]]; then
+  echo "Please provide hosted zone ID as third parameter"
+  exit 1
+fi
+
+export REGION=$(aws configure get region)
+
+# if [[ -z "$CLOUD_9_INSTALL" ]]; then
+#   echo "Setting region..."
+#   REGION=$(aws configure get region)
+# else
+#   echo "Setting region from instance metdata"
+#   TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+#   REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/placement/availability-zone | sed 's/\(.*\)[a-z]/\1/')
+# fi
 
 # export CDK_PARAM_CODE_COMMIT_REPOSITORY_NAME="aws-saas-factory-ref-solution-eks-saas-sbt"
 # if ! aws codecommit get-repository --repository-name $CDK_PARAM_CODE_COMMIT_REPOSITORY_NAME; then
@@ -41,8 +55,8 @@ export CDK_PARAM_APPLICATION_NAME_PLANE_SOURCE="sbt-application-plane-api"
 export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
 export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE=$CDK_PARAM_OFFBOARDING_DETAIL_TYPE
 
-npx cdk bootstrap
-npm run deploy --email=$CDK_PARAM_SYSTEM_ADMIN_EMAIL
+
+npm run deploy --email=$CDK_PARAM_SYSTEM_ADMIN_EMAIL --domain=$CDK_PARAM_DOMAIN_NAME --hostedzone=$CDK_PARAM_HOSTED_ZONE_ID
 
 STACKS=$(aws cloudformation describe-stacks)
 
