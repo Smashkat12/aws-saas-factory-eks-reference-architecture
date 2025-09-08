@@ -1,0 +1,115 @@
+#!/bin/bash
+echo "Installing kubectl"
+sudo curl --silent --location -o /usr/local/bin/kubectl \
+ "https://dl.k8s.io/release/v1.29.2/bin/linux/amd64/kubectl"
+
+sudo chmod +x /usr/local/bin/kubectl
+
+echo "Upgrading AWS CLI"
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install --update
+
+# Check OS type
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
+fi
+
+# Package installation function
+echo "Installing helper tools"
+install_packages() {
+    case $OS in
+        "ubuntu"|"debian")
+            echo "Detected Ubuntu/Debian - using apt"
+            sudo apt update
+            sudo apt install -y jq gettext bash-completion moreutils
+            ;;
+        "amzn"|"rhel"|"centos")
+            echo "Detected Amazon Linux/RHEL/CentOS - using yum"
+            sudo yum update -y
+            sudo yum install -y jq gettext bash-completion moreutils
+            ;;
+        *)
+            echo "Unsupported OS: $OS"
+            exit 1
+            ;;
+    esac
+}
+# Run script
+install_packages
+
+export ACCOUNT_ID=$(aws sts get-caller-identity --output text --query Account)
+TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` 
+export AWS_REGION=$(curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+export AWS_DEFAULT_REGION=$AWS_REGION
+test -n "$AWS_REGION" && echo AWS_REGION is "$AWS_REGION" || echo AWS_REGION is not set
+echo "export ACCOUNT_ID=${ACCOUNT_ID}" | tee -a ~/.bash_profile
+echo "export AWS_REGION=${AWS_REGION}" | tee -a ~/.bash_profile
+echo "export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION}" | tee -a ~/.bash_profile
+aws configure set default.region ${AWS_REGION}
+aws configure get default.region
+
+echo "Installing eksctl"
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+
+sudo mv -v /tmp/eksctl /usr/local/bin
+
+echo "Installing bash completion for eksctl"
+eksctl completion bash >> ~/.bash_completion
+. /etc/profile.d/bash_completion.sh
+. ~/.bash_completion
+
+echo "Installing helm"
+curl -sSL https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+
+echo 'yq() {
+  docker run --rm -i -v "${PWD}":/workdir mikefarah/yq yq "$@"
+}' | tee -a ~/.bashrc && source ~/.bashrc
+
+for command in kubectl jq envsubst aws
+  do
+    which $command &>/dev/null && echo "$command in path" || echo "$command NOT FOUND"
+  done
+
+kubectl completion bash >>  ~/.bash_completion
+. /etc/profile.d/bash_completion.sh
+. ~/.bash_completion
+
+aws sts get-caller-identity --query Arn | grep eks-ref-arch-admin -q && echo "IAM role valid. You can continue setting up the EKS Cluster." || echo "IAM role NOT valid. Do not proceed with creating the EKS Cluster or you won't be able to authenticate. Ensure you assigned the role to your EC2 instance as detailed in the README.md of the eks-saas repo"
+
+
+# SBT Lambda function must be built for ARM64 since v0.8.0 
+# Setup multi-architecture build environment
+setup_multiarch() {
+    case $OS in
+        "ubuntu"|"debian")
+            echo "Detected Ubuntu/Debian - Installing requirements"
+            sudo apt update
+            sudo apt install -y qemu-user-static binfmt-support docker-buildx-plugin
+            ;;
+        "amzn"|"rhel"|"centos")
+            echo "Detected Amazon Linux/RHEL/CentOS - Installing requirements"
+            sudo yum update -y
+            sudo yum install -y qemu-user-static docker-buildx-plugin
+            ;;
+        *)
+            echo "Unsupported OS: $OS"
+            exit 1
+            ;;
+    esac
+
+    echo "Setting up QEMU emulation for ARM64 docker build"
+    docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+    echo "Creating multi-architecture builder..."
+    docker buildx create --name multiarch --driver docker-container --use
+    docker buildx inspect --bootstrap
+
+    echo "Checking supported architectures..."
+    docker buildx ls
+
+    echo "Multi-architecture build environment setup complete!"
+}
+# Run setup
+setup_multiarch
