@@ -3,7 +3,45 @@ pipeline:
   identifier: saas_factory_eks_deployment
   projectIdentifier: default_project
   orgIdentifier: default
-  tags: {}
+  tags:
+    purpose: infrastructure
+    technology: cdk
+    environment: "<+pipeline.variables.ENV>"
+  properties:
+    ci:
+      codebase:
+        connectorRef: github_connector
+        repoName: saas-factory-eks
+        build: <+input>
+  variables:
+    - name: EMAIL
+      type: String
+      description: Deployment email for notifications
+      value: smashkat12@gmail.com
+    - name: DOMAIN
+      type: String
+      description: Primary domain for the application
+      value: thinkm8.co.uk
+    - name: HOSTED_ZONE_ID
+      type: String
+      description: Route53 hosted zone ID
+      value: Z0494651P0BXWLJV1MEX
+    - name: ENV
+      type: String
+      description: Environment (dev/staging/prod)
+      value: <+input>
+    - name: AWS_REGION
+      type: String
+      description: AWS deployment region
+      value: <+input>.default("us-east-1")
+    - name: CLUSTER_NAME
+      type: String
+      description: EKS cluster name
+      value: <+input>.default("saas-factory-<+pipeline.variables.ENV>-cluster")
+    - name: ACCOUNT_ID
+      type: String
+      description: AWS Account ID
+      value: <+secrets.getValue("aws_account_id")>
   stages:
     - stage:
         name: Build and Test
@@ -18,8 +56,31 @@ pipeline:
           runtime:
             type: Cloud
             spec: {}
+          infrastructure:
+            type: KubernetesDirect
+            spec:
+              connectorRef: testing_aws_connector_direct
+              namespace: harness-delegate
           execution:
             steps:
+              - step:
+                  type: Run
+                  name: Setup Environment
+                  identifier: setup_env
+                  spec:
+                    shell: Bash
+                    command: |
+                      # Set up Node.js and npm
+                      node --version
+                      npm --version
+                      
+                      # Install yq for YAML parsing
+                      wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+                      chmod +x /usr/local/bin/yq
+                      
+                      # Configure AWS CLI with the connector
+                      aws configure set region <+pipeline.variables.AWS_REGION>
+                      aws sts get-caller-identity
               - step:
                   type: Run
                   name: Install Dependencies
@@ -29,6 +90,10 @@ pipeline:
                     command: |
                       npm ci
                       npm run build
+                    envVariables:
+                      EMAIL: <+pipeline.variables.EMAIL>
+                      DOMAIN: <+pipeline.variables.DOMAIN>
+                      HOSTED_ZONE_ID: <+pipeline.variables.HOSTED_ZONE_ID>
               - step:
                   type: Run
                   name: Run Tests
@@ -44,7 +109,34 @@ pipeline:
                   spec:
                     shell: Bash
                     command: |
-                      npx cdk synth
+                      # Set CDK context parameters
+                      export CDK_DEFAULT_ACCOUNT=<+pipeline.variables.ACCOUNT_ID>
+                      export CDK_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                      
+                      # Synthesize CDK with parameters
+                      npx cdk synth --all \
+                        --context email=<+pipeline.variables.EMAIL> \
+                        --context domain=<+pipeline.variables.DOMAIN> \
+                        --context hostedZoneId=<+pipeline.variables.HOSTED_ZONE_ID> \
+                        --context environment=<+pipeline.variables.ENV>
+                    envVariables:
+                      EMAIL: <+pipeline.variables.EMAIL>
+                      DOMAIN: <+pipeline.variables.DOMAIN>
+                      HOSTED_ZONE_ID: <+pipeline.variables.HOSTED_ZONE_ID>
+              - step:
+                  type: Run
+                  name: Security Scan
+                  identifier: security_scan
+                  spec:
+                    shell: Bash
+                    command: |
+                      # Install and run security scanning tools
+                      npm audit --audit-level=high
+                      
+                      # Check for secrets in code
+                      git secrets --scan || echo "No secrets detected"
+                    when:
+                      stageStatus: Success
     
     - stage:
         name: Deploy Infrastructure
@@ -56,8 +148,54 @@ pipeline:
           customDeploymentRef:
             templateRef: cdk_deployment
             versionLabel: v1
+          infrastructure:
+            infrastructureDefinition:
+              type: Custom
+              spec:
+                customDeploymentRef:
+                  templateRef: cdk_deployment
+                  versionLabel: v1
+                variables:
+                  - name: aws_region
+                    type: String
+                    value: <+pipeline.variables.AWS_REGION>
+                  - name: account_id
+                    type: String
+                    value: <+pipeline.variables.ACCOUNT_ID>
+                  - name: email
+                    type: String
+                    value: <+pipeline.variables.EMAIL>
+                  - name: domain
+                    type: String
+                    value: <+pipeline.variables.DOMAIN>
+                  - name: hosted_zone_id
+                    type: String
+                    value: <+pipeline.variables.HOSTED_ZONE_ID>
           execution:
             steps:
+              - step:
+                  type: ShellScript
+                  name: Pre-deployment Validation
+                  identifier: pre_deploy_validation
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          # Validate AWS credentials and permissions
+                          aws sts get-caller-identity
+                          
+                          # Check AWS CLI configuration
+                          echo "AWS Region: ${AWS_REGION}"
+                          echo "Account ID: ${ACCOUNT_ID}"
+                          
+                          # Validate domain and hosted zone
+                          aws route53 get-hosted-zone --id <+pipeline.variables.HOSTED_ZONE_ID>
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
               - step:
                   type: ShellScript
                   name: CDK Bootstrap
@@ -69,7 +207,17 @@ pipeline:
                       type: Inline
                       spec:
                         script: |
-                          npx cdk bootstrap aws://${ACCOUNT_ID}/${AWS_REGION}
+                          # Configure AWS profile for CDK
+                          export AWS_PROFILE=default
+                          export CDK_DEFAULT_ACCOUNT=<+pipeline.variables.ACCOUNT_ID>
+                          export CDK_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                          
+                          # Bootstrap CDK in the target account/region
+                          npx cdk bootstrap aws://<+pipeline.variables.ACCOUNT_ID>/<+pipeline.variables.AWS_REGION> \
+                            --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
               - step:
                   type: ShellScript
                   name: CDK Deploy
@@ -81,7 +229,51 @@ pipeline:
                       type: Inline
                       spec:
                         script: |
-                          npx cdk deploy --all --require-approval never
+                          # Set environment variables for CDK deployment
+                          export AWS_PROFILE=default
+                          export CDK_DEFAULT_ACCOUNT=<+pipeline.variables.ACCOUNT_ID>
+                          export CDK_DEFAULT_REGION=<+pipeline.variables.AWS_REGION>
+                          
+                          # Deploy with all required context parameters
+                          npx cdk deploy --all --require-approval never \
+                            --context email=<+pipeline.variables.EMAIL> \
+                            --context domain=<+pipeline.variables.DOMAIN> \
+                            --context hostedZoneId=<+pipeline.variables.HOSTED_ZONE_ID> \
+                            --context environment=<+pipeline.variables.ENV> \
+                            --parameters email=<+pipeline.variables.EMAIL> \
+                            --parameters domain=<+pipeline.variables.DOMAIN> \
+                            --parameters hostedZoneId=<+pipeline.variables.HOSTED_ZONE_ID>
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      ACCOUNT_ID: <+pipeline.variables.ACCOUNT_ID>
+                      EMAIL: <+pipeline.variables.EMAIL>
+                      DOMAIN: <+pipeline.variables.DOMAIN>
+                      HOSTED_ZONE_ID: <+pipeline.variables.HOSTED_ZONE_ID>
+                      ENV: <+pipeline.variables.ENV>
+              - step:
+                  type: ShellScript
+                  name: Post-Deploy Configuration
+                  identifier: post_deploy_config
+                  spec:
+                    shell: Bash
+                    onDelegate: true
+                    source:
+                      type: Inline
+                      spec:
+                        script: |
+                          # Update kubeconfig for the deployed EKS cluster
+                          aws eks update-kubeconfig --region <+pipeline.variables.AWS_REGION> --name <+pipeline.variables.CLUSTER_NAME>
+                          
+                          # Verify cluster connectivity
+                          kubectl get nodes
+                          
+                          # Apply any additional Kubernetes configurations
+                          if [ -f "k8s-configs/*.yaml" ]; then
+                            kubectl apply -f k8s-configs/
+                          fi
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      CLUSTER_NAME: <+pipeline.variables.CLUSTER_NAME>
         tags: {}
         failureStrategies:
           - onFailure:
@@ -112,8 +304,20 @@ pipeline:
                   spec:
                     shell: Bash
                     command: |
-                      aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION}
-                      kubectl get nodes
+                      # Describe the EKS cluster
+                      aws eks describe-cluster --name <+pipeline.variables.CLUSTER_NAME> --region <+pipeline.variables.AWS_REGION>
+                      
+                      # Update kubeconfig
+                      aws eks update-kubeconfig --region <+pipeline.variables.AWS_REGION> --name <+pipeline.variables.CLUSTER_NAME>
+                      
+                      # Validate nodes are ready
+                      kubectl get nodes -o wide
+                      
+                      # Check node status
+                      kubectl describe nodes
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      CLUSTER_NAME: <+pipeline.variables.CLUSTER_NAME>
               - step:
                   type: Run
                   name: Run Health Checks
@@ -121,5 +325,72 @@ pipeline:
                   spec:
                     shell: Bash
                     command: |
-                      kubectl get pods --all-namespaces
+                      # Check all pods across namespaces
+                      kubectl get pods --all-namespaces -o wide
+                      
+                      # Check services
                       kubectl get services --all-namespaces
+                      
+                      # Check ingress controllers
+                      kubectl get ingress --all-namespaces
+                      
+                      # Validate DNS resolution
+                      kubectl run dns-test --image=busybox --rm -it --restart=Never -- nslookup kubernetes.default || true
+              - step:
+                  type: Run
+                  name: Infrastructure Testing
+                  identifier: infra_testing
+                  spec:
+                    shell: Bash
+                    command: |
+                      # Test Route53 records
+                      nslookup <+pipeline.variables.DOMAIN>
+                      
+                      # Test load balancer endpoints
+                      kubectl get svc --all-namespaces -o jsonpath='{.items[*].status.loadBalancer.ingress[0].hostname}' | tr ' ' '\n' | grep -v '^$' | while read lb; do
+                        echo "Testing load balancer: $lb"
+                        curl -I "http://$lb" --connect-timeout 10 || echo "LB $lb not accessible yet"
+                      done
+                      
+                      # Validate security groups
+                      aws ec2 describe-security-groups --filters "Name=group-name,Values=*<+pipeline.variables.CLUSTER_NAME>*" --region <+pipeline.variables.AWS_REGION>
+                    envVariables:
+                      AWS_REGION: <+pipeline.variables.AWS_REGION>
+                      CLUSTER_NAME: <+pipeline.variables.CLUSTER_NAME>
+                      DOMAIN: <+pipeline.variables.DOMAIN>
+              - step:
+                  type: Run
+                  name: Generate Deployment Report
+                  identifier: deployment_report
+                  spec:
+                    shell: Bash
+                    command: |
+                      # Create deployment report
+                      echo "======================================" > deployment-report.txt
+                      echo "SaaS Factory EKS Deployment Report" >> deployment-report.txt
+                      echo "======================================" >> deployment-report.txt
+                      echo "Timestamp: $(date)" >> deployment-report.txt
+                      echo "Environment: <+pipeline.variables.ENV>" >> deployment-report.txt
+                      echo "Region: <+pipeline.variables.AWS_REGION>" >> deployment-report.txt
+                      echo "Cluster: <+pipeline.variables.CLUSTER_NAME>" >> deployment-report.txt
+                      echo "Domain: <+pipeline.variables.DOMAIN>" >> deployment-report.txt
+                      echo "Email: <+pipeline.variables.EMAIL>" >> deployment-report.txt
+                      echo "" >> deployment-report.txt
+                      
+                      # Add cluster information
+                      echo "Cluster Nodes:" >> deployment-report.txt
+                      kubectl get nodes >> deployment-report.txt
+                      echo "" >> deployment-report.txt
+                      
+                      # Add deployed services
+                      echo "Deployed Services:" >> deployment-report.txt
+                      kubectl get services --all-namespaces >> deployment-report.txt
+                      
+                      # Display report
+                      cat deployment-report.txt
+                    publishArtifacts:
+                      - identifier: deployment_report
+                        type: File
+                        spec:
+                          files:
+                            - deployment-report.txt

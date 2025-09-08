@@ -1,0 +1,24 @@
+connector:
+  name: GitHub Connector
+  identifier: github_connector
+  description: GitHub connector for repository access
+  orgIdentifier: default
+  projectIdentifier: default_project
+  type: Github
+  spec:
+    url: https://github.com/your-org/saas-factory-eks
+    validationRepo: saas-factory-eks
+    authentication:
+      type: Http
+      spec:
+        type: UsernameToken
+        spec:
+          username: <+secrets.getValue("github_username")>
+          tokenRef: github_pat
+    apiAccess:
+      type: Token
+      spec:
+        tokenRef: github_pat
+    delegateSelectors:
+      - harness-delegate
+    executeOnDelegate: true

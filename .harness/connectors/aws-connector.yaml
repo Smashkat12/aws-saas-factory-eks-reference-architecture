@@ -1,7 +1,7 @@
 connector:
-  name: AWS Connector
-  identifier: aws_connector
-  description: AWS connector for CDK deployments
+  name: Testing AWS Connector Direct
+  identifier: testing_aws_connector_direct
+  description: AWS connector for CDK deployments with direct access
   orgIdentifier: default
   projectIdentifier: default_project
   type: Aws
@@ -9,8 +9,9 @@ connector:
     credential:
       type: ManualConfig
       spec:
-        accessKey: <+secrets.getValue("aws_access_key")>
-        secretKey: <+secrets.getValue("aws_secret_key")>
+        accessKey: <+secrets.getValue("aws_access_key_id")>
+        secretKey: <+secrets.getValue("aws_secret_access_key")>
     delegateSelectors:
       - harness-delegate
     executeOnDelegate: true
+    region: us-east-1

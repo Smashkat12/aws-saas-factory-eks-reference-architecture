@@ -17,4 +17,13 @@ inputSet:
         value: saas-factory-prod-cluster
       - name: ACCOUNT_ID
         type: String
-        value: "<+account.complianceStatus>"
+        value: <+secrets.getValue("aws_account_id")>
+      - name: EMAIL
+        type: String
+        value: smashkat12@gmail.com
+      - name: DOMAIN
+        type: String
+        value: thinkm8.co.uk
+      - name: HOSTED_ZONE_ID
+        type: String
+        value: Z0494651P0BXWLJV1MEX

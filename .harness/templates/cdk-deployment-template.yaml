@@ -5,17 +5,29 @@ template:
   type: CustomDeployment
   projectIdentifier: default_project
   orgIdentifier: default
-  description: Reusable template for CDK deployments
-  tags: {}
+  description: Reusable template for CDK deployments with comprehensive configuration
+  tags:
+    technology: cdk
+    purpose: infrastructure
   spec:
     infrastructure:
       variables:
         - name: aws_region
           type: String
           description: AWS Region for deployment
+          value: us-east-1
         - name: account_id
           type: String
           description: AWS Account ID
+        - name: email
+          type: String
+          description: Email for notifications and tagging
+        - name: domain
+          type: String
+          description: Primary domain name
+        - name: hosted_zone_id
+          type: String
+          description: Route53 hosted zone ID
     execution:
       steps:
         - step:
@@ -30,14 +42,43 @@ template:
                 spec:
                   script: |
                     # Install CDK if not present
-                    npm install -g aws-cdk
+                    if ! command -v cdk &> /dev/null; then
+                      npm install -g aws-cdk@latest
+                    fi
                     
-                    # Set environment variables
+                    # Set environment variables from infra variables
                     export AWS_REGION=<+infra.variables.aws_region>
                     export ACCOUNT_ID=<+infra.variables.account_id>
+                    export EMAIL=<+infra.variables.email>
+                    export DOMAIN=<+infra.variables.domain>
+                    export HOSTED_ZONE_ID=<+infra.variables.hosted_zone_id>
                     
-                    # Verify CDK installation
+                    # Configure CDK environment
+                    export CDK_DEFAULT_ACCOUNT=${ACCOUNT_ID}
+                    export CDK_DEFAULT_REGION=${AWS_REGION}
+                    
+                    # Verify CDK installation and AWS access
                     cdk --version
+                    aws sts get-caller-identity
+        - step:
+            type: ShellScript
+            name: CDK Bootstrap
+            identifier: cdk_bootstrap
+            spec:
+              shell: Bash
+              onDelegate: true
+              source:
+                type: Inline
+                spec:
+                  script: |
+                    # Bootstrap CDK in target account/region
+                    export AWS_REGION=<+infra.variables.aws_region>
+                    export ACCOUNT_ID=<+infra.variables.account_id>
+                    export CDK_DEFAULT_ACCOUNT=${ACCOUNT_ID}
+                    export CDK_DEFAULT_REGION=${AWS_REGION}
+                    
+                    npx cdk bootstrap aws://${ACCOUNT_ID}/${AWS_REGION} \
+                      --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
         - step:
             type: ShellScript
             name: Deploy with CDK
@@ -49,13 +90,47 @@ template:
                 type: Inline
                 spec:
                   script: |
-                    # Load configuration
-                    export EMAIL=$(yq e '.deployment.email' harness-config.yaml)
-                    export DOMAIN=$(yq e '.deployment.domain' harness-config.yaml)
-                    export HOSTED_ZONE=$(yq e '.deployment.hostedzone' harness-config.yaml)
+                    # Set all environment variables
+                    export AWS_REGION=<+infra.variables.aws_region>
+                    export ACCOUNT_ID=<+infra.variables.account_id>
+                    export EMAIL=<+infra.variables.email>
+                    export DOMAIN=<+infra.variables.domain>
+                    export HOSTED_ZONE_ID=<+infra.variables.hosted_zone_id>
+                    export CDK_DEFAULT_ACCOUNT=${ACCOUNT_ID}
+                    export CDK_DEFAULT_REGION=${AWS_REGION}
                     
-                    # Deploy infrastructure
+                    # Deploy infrastructure with all context parameters
                     npx cdk deploy --all --require-approval never \
                       --context email=${EMAIL} \
                       --context domain=${DOMAIN} \
-                      --context hostedZoneId=${HOSTED_ZONE}
+                      --context hostedZoneId=${HOSTED_ZONE_ID} \
+                      --parameters email=${EMAIL} \
+                      --parameters domain=${DOMAIN} \
+                      --parameters hostedZoneId=${HOSTED_ZONE_ID}
+        - step:
+            type: ShellScript
+            name: Post-Deploy Validation
+            identifier: post_deploy_validation
+            spec:
+              shell: Bash
+              onDelegate: true
+              source:
+                type: Inline
+                spec:
+                  script: |
+                    export AWS_REGION=<+infra.variables.aws_region>
+                    export DOMAIN=<+infra.variables.domain>
+                    
+                    # List created CloudFormation stacks
+                    aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE --region ${AWS_REGION}
+                    
+                    # Test DNS resolution if domain is configured
+                    if [ ! -z "$DOMAIN" ]; then
+                      nslookup $DOMAIN || echo "Domain $DOMAIN not yet resolved"
+                    fi
+                    
+                    # Output deployment summary
+                    echo "Deployment completed successfully!"
+                    echo "Region: ${AWS_REGION}"
+                    echo "Domain: ${DOMAIN}"
+                    echo "Timestamp: $(date)"
