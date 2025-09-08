@@ -167,6 +167,17 @@ pipeline:
                           export CDK_PARAM_OFFBOARDING_DETAIL_TYPE='Offboarding'
                           export CDK_PARAM_DEPROVISIONING_DETAIL_TYPE=$CDK_PARAM_OFFBOARDING_DETAIL_TYPE
                           
+                          # Pre-bundle Python Lambda functions to avoid Docker requirement
+                          echo "Pre-bundling Lambda functions..."
+                          cd /tmp/saas-factory-eks
+                          
+                          # Install Python dependencies locally
+                          pip3 install --target /tmp/lambda-layer/python aws-lambda-powertools requests boto3 || true
+                          
+                          # Set environment to skip Docker bundling
+                          export CDK_DOCKER=false
+                          export SKIP_BUNDLING=true
+                          
                           # Run CDK deployment with domain parameters
                           echo "Running CDK deploy with custom domain..."
                           echo "Email: smashkat12@gmail.com"
